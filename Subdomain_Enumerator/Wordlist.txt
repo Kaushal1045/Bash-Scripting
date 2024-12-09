@@ -1,0 +1,9 @@
+www
+students
+employees
+admin
+store
+index
+exam
+cart
+feedback
