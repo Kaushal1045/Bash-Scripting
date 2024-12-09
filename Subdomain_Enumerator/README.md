@@ -37,6 +37,7 @@ This Bash script is designed to identify subdomains of a given domain using a wo
         blog
         shop
 
+---
 
 ## Usage
 
@@ -62,6 +63,8 @@ Run the script with the following syntax:
         www.example.com
         mail.example.com
         blog.example.com
+
+---
 
 ## Notes:
 
