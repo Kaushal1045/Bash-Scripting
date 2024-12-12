@@ -1,119 +1,86 @@
 #!/bin/bash
-
 set -euo pipefail
 
 # Function to configure DNS
 configure_dns() {
-    echo "++++++CONFIGURING DNS++++++"
+    echo "++++++CONFIGURE DNS++++++++++++++++++++++++++++++++"
+    ip=$(ifconfig ens33 | grep "inet" | grep -v "inet6" | awk '{print $2}')
+    read -p "Enter the user name: " user
+    user=${user,,}
 
-    # Retrieve IP address
-    ip=$(ip addr show ens33 | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
-    
-    # Prompt for username and domain
-    read -p "Enter the username: " user
-    user=${user,,} # Convert to lowercase
-
-    if id "$user" &>/dev/null; then
-        echo "Error: User '$user' already exists."
-        exit 1
-    fi
-
-    useradd "$user" && echo "User '$user' created successfully."
+    # Check if user exists
+    id ${user:-root} &> /dev/null && { echo "User ${user:-root} exists."; exit 1; } || useradd ${user}; echo "User ${user} created successfully"
 
     read -p "Enter the domain name: " domain
-    domain=${domain,,} # Convert to lowercase
+    domain=${domain,,}
 
+    # Check if the domain is already configured
     if grep -q "\"$domain\"" /etc/named.conf; then
-        echo "Error: Domain '$domain' is already configured on the server."
-        userdel -r "$user"
-        exit 1
+        echo "$domain already configured on the server."
+        read -p "Do you want to overwrite the existing configuration? (y/n): " choice
+        case "$choice" in
+            y|Y)
+                echo "Removing existing configuration for $domain..."
+                # Remove zone configuration from /etc/named.conf
+                sed -i "/zone \"$domain\" IN {/,/};/d" /etc/named.conf
+                # Remove the zone file
+                rm -f "/var/named/for.$domain"
+                ;;
+            n|N)
+                echo "Exiting without changes."
+                exit 0
+                ;;
+            *)
+                echo "Invalid choice. Exiting."
+                exit 1
+                ;;
+        esac
     fi
 
-    read -p "Enter the email (e.g., admin@example.com): " email
-
-    # Add DNS zone configuration
-    cat <<EOF >> /etc/named.conf
-zone "$domain" IN {
-    type master;
-    file "for.$domain";
-};
-EOF
-
-    # Create zone file
-    cat <<EOF > "/var/named/for.$domain"
-\$TTL 1D
-@    IN SOA master.spider.com. $email. (
-        0       ; serial
-        1D      ; refresh
-        1H      ; retry
-        1W      ; expire
-        3H )    ; minimum
-@    IN NS    master.spider.com.
-$domain. IN A    $ip
-www     IN A    $ip
-EOF
-
-    # Set permissions
+    read -p "Enter the Email: " email
+    echo -e "zone \"$domain\" IN {\n\ttype master;\n\tfile \"for.$domain\";\n};" >> /etc/named.conf
+    echo -e "\$TTL 1D
+@\tIN SOA master.spider.com. $email. (
+                    0\t; serial
+                    1D\t; refresh
+                    1H\t; retry
+                    1W\t; expire
+                    3H )\t; minimum
+@\tIN\tNS\tmaster.spider.com.
+$domain.\tIN\tA\t$ip
+www\tIN\tA\t$ip" > /var/named/for.$domain
     chgrp named /var/named/for.$domain
-
-    # Restart named service
-    echo -n "Restarting the named service: "
+    echo -n "Starting the service \"named\" : "
     systemctl restart named
     echo "DONE"
-
-    # Validate DNS configuration
-    echo "Checking A record for $domain: "
-    host -t a "$domain"
-    echo "DNS configuration for $domain completed."
+    echo "Looking for A record for $domain: "
+    host -t a $domain
+    echo "+++++++++++++++++++++++++++++++++++++++++++++++"
 }
 
 # Function to configure Apache
 configure_apache() {
-    echo "++++++CONFIGURING APACHE++++++"
-
-    # Create public_html directory
-    mkdir -p "/home/$user/public_html"
-
-    # Add sample HTML page
-    echo "<h1>Sample webpage for $domain</h1>" > "/home/$user/public_html/index.html"
-
-    # Set permissions
-    chmod 711 "/home/$user"
-    chmod 755 "/home/$user/public_html"
-    chmod 644 "/home/$user/public_html/index.html"
-    chown "$user:$user" "/home/$user/public_html" -R
-
-    # Create Apache virtual host configuration
-    cat <<EOF > "/etc/httpd/sites-available/${domain}.conf"
-<VirtualHost *:80>
-    DocumentRoot /home/$user/public_html
-    ServerName $domain
-    ServerAlias www.$domain
-    ErrorLog /var/log/httpd/${domain}_error_log
-    CustomLog /var/log/httpd/${domain}_access_log combined
-</VirtualHost>
-EOF
-
-    # Enable site
-    ln -sf "/etc/httpd/sites-available/${domain}.conf" "/etc/httpd/sites-enabled/${domain}.conf"
-
-    # Restart Apache service
-    echo -n "Restarting the httpd service: "
+    echo "++++++CONFIGURE APACHE++++++++++++++++++++++++++++++++"
+    mkdir -p /home/$user/public_html
+    echo "<h1>Sample webpage for $domain</h1>" > /home/$user/public_html/index.html
+    chmod 711 /home/$user
+    chmod 755 /home/$user/public_html
+    chmod 644 /home/$user/public_html/index.html
+    chown $user:$user /home/$user/public_html -R
+    echo "<VirtualHost *:80>
+    DocumentRoot\t/home/$user/public_html
+    ServerName\t$domain
+    ServerAlias\twww.$domain
+    ErrorLog\t/var/log/httpd/${domain}_error_log
+    CustomLog\t/var/log/httpd/${domain}_access_log combined
+</VirtualHost>" > /etc/httpd/sites-available/${domain}.conf
+    ln -sf /etc/httpd/sites-available/${domain}.conf /etc/httpd/sites-enabled/${domain}.conf
+    echo -n "Starting the service \"httpd\" : "
     systemctl restart httpd
     echo "DONE"
-
-    # Open site in Firefox
-    echo "Opening $domain in Firefox..."
-    firefox "http://$domain" &
+    firefox http://$domain
 }
 
-# Main script
-if [[ $EUID -ne 0 ]]; then
-    echo "Error: This script must be run as root."
-    exit 1
-fi
-
+# Main Script
 configure_dns
 configure_apache
-
-echo "Configuration completed successfully."
